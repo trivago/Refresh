@@ -52,7 +52,7 @@ def split_file(input_file, output_dir):
             output_file.write(" ".join(word_tokenized_sent))
             output_file.close()
 
-
+#function returning ids of topk number of best sentences
 def prepare_labels(source_sentences:list, target:str, topk:int=3):
     embed = hub.Module("https://tfhub.dev/google/universal-sentence-encoder/2")
     with tf.Session() as session:
