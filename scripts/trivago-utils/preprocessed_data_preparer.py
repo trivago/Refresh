@@ -35,25 +35,22 @@ def parse_arguments():
             and os.path.isfile(vocab_argument):
         print("*** Opening file...")
 
-        input_file_obj = open(input_argument, "r")
-        target_file_obj = open(target_argument, "r")
-        vocab_file_obj = open(vocab_argument, "r")
+        vocab_dict = build_vocab_dictionary(open(vocab_argument, "r"))
 
-        target_sentence_ids = create_titles_file(target_file_obj, vocab_file_obj, data_type_argument)
+        target_sentence_ids = create_titles_file(open(target_argument, "r"), vocab_dict, data_type_argument)
 
-        create_image_file(target_file_obj, vocab_file_obj, target_sentence_ids, data_type_argument)
+        create_image_file(open(input_argument, "r"), vocab_dict, target_sentence_ids, data_type_argument)
 
-        create_single_oracle(input_file_obj, target_sentence_ids, data_type_argument)
+        create_single_oracle(open(input_argument, "r"), target_sentence_ids, data_type_argument)
     else:
         print("*** Invalid arguments provided.")
 
-def create_titles_file(target_file, vocab_file, data_type_argument):
+
+def create_titles_file(target_file, vocab_dict, data_type_argument):
     target_sentences_dict = {}
     print("*** Creating Title file...")
     title_file = open(os.path.dirname(os.path.realpath(target_file.name)) +
                       "/usp-" + data_type_argument + ".title", "w")
-
-    vocab_dict = build_vocab_dictionary(vocab_file)
 
     for line_count, line in enumerate(target_file):
         title_uuid = "usp-" + uuid.uuid4().hex
@@ -68,20 +65,23 @@ def create_titles_file(target_file, vocab_file, data_type_argument):
     return target_sentences_dict
 
 
-def create_image_file(input_file, vocab_file, target_sentence_dict, data_type_argument):
+def create_image_file(input_file, vocab_dict, target_sentence_dict, data_type_argument):
     print("*** Creating Image file...")
-    # Build vocab dictionary
-    vocab_dict = build_vocab_dictionary(vocab_file)
 
     image_file = open(os.path.dirname(os.path.realpath(input_file.name)) +
                       "/usp-" + data_type_argument + ".image", "w")
 
+    word_id_sent_list = []
+    for line in input_file:
+        word_id_sent = convert_sentence_to_word_ids(line, vocab_dict)
+        word_id_sent_list.append(" ".join(word_id_sent) + "\n\n")
+
     target_sentence_ids = list(target_sentence_dict.keys())
-    for title_id in target_sentence_ids:
+    for title_count, title_id in enumerate(target_sentence_ids):
         image_file.write(title_id + "\n")
-        for line_count, line in enumerate(input_file):
-            word_id_sent = convert_sentence_to_word_ids(line, vocab_dict)
-            image_file.write(" ".join(word_id_sent) + "\n\n")
+        if title_count <= (len(word_id_sent_list) - 1):
+            image_file.write(word_id_sent_list[title_count])
+
     image_file.close()
     print("*** Finished Image file...")
 
@@ -102,7 +102,6 @@ def create_single_oracle(input_file, target_sentence_dict, data_type_argument):
             print("*** Processing line number {}".format(line_count))
             sent_tokenize_list = sent_tokenize(line)
             print("*** Number of sentences: {}".format(len(sent_tokenize_list)))
-            print("*** Current Progress: {}".format(str((line_count / len(input_file)) * 100)) + "%")
 
             distances = prepare_labels(sent_tokenize_list, target_sentence)
 
