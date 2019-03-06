@@ -1,4 +1,4 @@
-# preprocessed_data_preparer.py -- Prepares trivago USP corpora for the Refresh model when called.
+# preprocessed_data_preparer-gpu.py -- Prepares trivago USP corpora for the Refresh model when called.
 # Requires Python 3 and Tensorflow v1+ to run.
 # @author Saad Mahamood
 
@@ -16,6 +16,8 @@ from scipy import spatial
 from generic_utils import build_vocab_dictionary
 from generic_utils import convert_sentence_to_word_ids
 
+import time
+import gc
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -23,6 +25,7 @@ def parse_arguments():
     parser.add_argument('-t', '--target', help="Corresponding target file", required=True)
     parser.add_argument('-v', '--vocab', help="Vocab file", required=True)
     parser.add_argument('-dt', '--data_type', help="Data Type e.g. training, test, etc.", required=True)
+    parser.add_argument('-ls', '--line_start', help="Line start number", required=False)
 
     args = parser.parse_args()
 
@@ -30,18 +33,23 @@ def parse_arguments():
     target_argument = args.target
     vocab_argument = args.vocab
     data_type_argument = args.data_type
+    line_start_number = args.line_start
+
+    if line_start_number is None:
+        line_start_number = 0
 
     if os.path.isfile(input_argument) and os.path.isfile(target_argument) \
             and os.path.isfile(vocab_argument):
         print("*** Opening file...")
 
-        vocab_dict = build_vocab_dictionary(open(vocab_argument, "r"))
+        vocab_dict = build_vocab_dictionary(open(vocab_argument, "r", encoding="utf-8"))
 
-        target_sentence_ids = create_titles_file(open(target_argument, "r"), vocab_dict, data_type_argument)
+        target_sentence_ids = create_titles_file(open(target_argument, "r", encoding="utf-8"), vocab_dict, data_type_argument)
 
-        create_image_file(open(input_argument, "r"), vocab_dict, target_sentence_ids, data_type_argument)
+        create_image_file(open(input_argument, "r", encoding="utf-8"), vocab_dict, target_sentence_ids, data_type_argument)
 
-        create_single_oracle(open(input_argument, "r"), target_sentence_ids, data_type_argument)
+        create_single_oracle(open(input_argument, "r", encoding="utf-8"), target_sentence_ids, data_type_argument,
+                             int(line_start_number))
     else:
         print("*** Invalid arguments provided.")
 
@@ -86,44 +94,53 @@ def create_image_file(input_file, vocab_dict, target_sentence_dict, data_type_ar
     print("*** Finished Image file...")
 
 
-def create_single_oracle(input_file, target_sentence_dict, data_type_argument):
+def create_single_oracle(input_file, target_sentence_dict, data_type_argument, line_start_number):
+    print("*** Fetching Universal Sentence Encoder embeddings")
+    embed = hub.Module("https://tfhub.dev/google/universal-sentence-encoder-large/3")
+
     print("*** Creating Single Oracle file...")
+
     oracle_file_path = os.path.dirname(os.path.realpath(input_file.name)) + \
                        "/usp-" + data_type_argument + ".label.singleoracle"
-    oracle_file = open(oracle_file_path, "w")
-    oracle_file.close()
-
     logging_file_path = os.path.dirname(os.path.realpath(input_file.name)) + "/usp-" + data_type_argument + ".log.txt"
-    logging_file = open(logging_file_path, "w")
-    logging_file.close()
 
-    print("*** Fetching Universal Sentence Encoder embeddings")
-    embed = hub.Module("https://tfhub.dev/google/universal-sentence-encoder/2")
+    if line_start_number == 0:
+        print("*** Creating new Oracle and Logging Files...")
+        oracle_file = open(oracle_file_path, "w")
+        oracle_file.close()
+
+        logging_file = open(logging_file_path, "w")
+        logging_file.close()
 
     target_sentence_ids = list(target_sentence_dict.keys())
+
     for line_count, line in enumerate(input_file):
         oracle_file = open(oracle_file_path, "a")
         logging_file = open(logging_file_path, "a")
 
-        if line_count <= (len(target_sentence_ids) - 1):
-            title_uuid = target_sentence_ids[line_count]
-            target_sentence = target_sentence_dict[title_uuid]
+        if line_count > line_start_number or line_count == line_start_number:
+            if line_count <= (len(target_sentence_ids) - 1):
+                title_uuid = target_sentence_ids[line_count]
+                target_sentence = target_sentence_dict[title_uuid]
 
-            oracle_file.write(title_uuid + "\n")
+                oracle_file.write(title_uuid + "\n")
 
-            print("*** Processing line number {}".format(line_count))
-            sent_tokenize_list = sent_tokenize(line)
-            print("*** Number of sentences: {}".format(len(sent_tokenize_list)))
+                print("*** Processing line number {}".format(line_count))
+                sent_tokenize_list = sent_tokenize(line)
+                print("*** Number of sentences: {}".format(len(sent_tokenize_list)))
 
-            logging_file.write("*** Processing line number {} \n".format(line_count))
-            logging_file.write("*** Number of sentences: {} \n".format(len(sent_tokenize_list)))
+                logging_file.write("*** Processing line number {} \n".format(line_count))
+                logging_file.write("*** Number of sentences: {} \n".format(len(sent_tokenize_list)))
 
-            distances = prepare_labels(embed, sent_tokenize_list, target_sentence)
+                distances = prepare_labels(embed, sent_tokenize_list, target_sentence)
 
-            for dist_count, a_distance in enumerate(distances):
-                oracle_file.write(str(int(a_distance)) + "\n")
-                if dist_count == (len(distances) - 1):
-                    oracle_file.write("\n")
+                for dist_count, a_distance in enumerate(distances):
+                    oracle_file.write(str(int(a_distance)) + "\n")
+                    if dist_count == (len(distances) - 1):
+                        oracle_file.write("\n")
+            else:
+                logging_file.write("*** Line number {} is greater than target sentences length {} \n".format(line_count,
+                                                                                                             len(target_sentence_ids) - 1))
         oracle_file.close()
         logging_file.close()
     logging_file = open(logging_file_path, "w")
@@ -133,7 +150,10 @@ def create_single_oracle(input_file, target_sentence_dict, data_type_argument):
 
 def prepare_labels(embed, source_sentences:list, target:str, topk:int=3):
     # function returning ids of topk number of best sentences
-    with tf.Session() as session:
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.7, allocator_type='BFC', allow_growth = True)
+    
+
+    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=False, gpu_options=gpu_options)) as session:
         session.run([tf.global_variables_initializer(), tf.tables_initializer()])
         input_sentences = tf.placeholder(tf.string, shape=[None])
         embeddings = embed(input_sentences)
