@@ -86,77 +86,88 @@ def create_image_file(input_file, vocab_dict, target_sentence_dict, data_type_ar
     print("*** Finished Image file...")
 
 
+
 def create_single_oracle(input_file, target_sentence_dict, data_type_argument):
-    print("*** Creating Single Oracle file...")
-    oracle_file_path = os.path.dirname(os.path.realpath(input_file.name)) + \
-                       "/usp-" + data_type_argument + ".label.singleoracle"
-    oracle_file = open(oracle_file_path, "w")
-    oracle_file.close()
-
-    logging_file_path = os.path.dirname(os.path.realpath(input_file.name)) + "/usp-" + data_type_argument + ".log.txt"
-    logging_file = open(logging_file_path, "w")
-    logging_file.close()
-
     print("*** Fetching Universal Sentence Encoder embeddings")
     embed = hub.Module("https://tfhub.dev/google/universal-sentence-encoder/2")
 
+    print("*** Creating Single Oracle file...")
+
+    oracle_file_path = os.path.dirname(os.path.realpath(input_file.name)) + \
+                       "/usp-" + data_type_argument + ".label.singleoracle"
+    logging_file_path = os.path.dirname(os.path.realpath(input_file.name)) + "/usp-" + data_type_argument + ".log.txt"
+
+
+    print("*** Creating new Oracle and Logging Files...")
+    oracle_file = open(oracle_file_path, "w")
+    oracle_file.close()
+
+    logging_file = open(logging_file_path, "w")
+    logging_file.close()
+
     target_sentence_ids = list(target_sentence_dict.keys())
-    for line_count, line in enumerate(input_file):
-        oracle_file = open(oracle_file_path, "a")
-        logging_file = open(logging_file_path, "a")
 
-        if line_count <= (len(target_sentence_ids) - 1):
-            title_uuid = target_sentence_ids[line_count]
-            target_sentence = target_sentence_dict[title_uuid]
+    with tf.Session() as session:
+        session.run([tf.global_variables_initializer(), tf.tables_initializer()])
+        tf_placeholder = tf.placeholder(tf.string, shape=[None])
 
-            oracle_file.write(title_uuid + "\n")
+        for line_count, line in enumerate(input_file):
+            oracle_file = open(oracle_file_path, "a")
+            logging_file = open(logging_file_path, "a")
 
-            print("*** Processing line number {}".format(line_count))
-            sent_tokenize_list = sent_tokenize(line)
-            print("*** Number of sentences: {}".format(len(sent_tokenize_list)))
+            if line_count <= (len(target_sentence_ids) - 1):
+                title_uuid = target_sentence_ids[line_count]
+                target_sentence = target_sentence_dict[title_uuid]
 
-            logging_file.write("*** Processing line number {} \n".format(line_count))
-            logging_file.write("*** Number of sentences: {} \n".format(len(sent_tokenize_list)))
+                oracle_file.write(title_uuid + "\n")
 
-            distances = prepare_labels(embed, sent_tokenize_list, target_sentence)
+                print("*** Processing line number {}".format(line_count))
+                sent_tokenize_list = sent_tokenize(line)
+                print("*** Number of sentences: {}".format(len(sent_tokenize_list)))
 
-            for dist_count, a_distance in enumerate(distances):
-                oracle_file.write(str(int(a_distance)) + "\n")
-                if dist_count == (len(distances) - 1):
-                    oracle_file.write("\n")
-        oracle_file.close()
-        logging_file.close()
+                logging_file.write("*** Processing line number {} \n".format(line_count))
+                logging_file.write("*** Number of sentences: {} \n".format(len(sent_tokenize_list)))
+
+
+                distances = prepare_labels(embed, tf_placeholder, sent_tokenize_list, target_sentence)
+
+                for dist_count, a_distance in enumerate(distances):
+                    oracle_file.write(str(int(a_distance)) + "\n")
+                    if dist_count == (len(distances) - 1):
+                        oracle_file.write("\n")
+            else:
+                logging_file.write("*** Line number {} is greater than target sentences length {} \n".format(line_count,
+                                                                                                             len(target_sentence_ids) - 1))
+            oracle_file.close()
+            logging_file.close()
     logging_file = open(logging_file_path, "w")
     logging_file.write("*** Finished creating Single Oracle file.")
     logging_file.close()
 
 
-def prepare_labels(embed, source_sentences:list, target:str, topk:int=3):
+def prepare_labels(embed, tf_placeholder, source_sentences:list, target:str, topk:int=3):
     # function returning ids of topk number of best sentences
-    with tf.Session() as session:
-        session.run([tf.global_variables_initializer(), tf.tables_initializer()])
-        input_sentences = tf.placeholder(tf.string, shape=[None])
-        embeddings = embed(input_sentences)
+    target_embeddings = embed([target])
+    target_embeds = target_embeddings.eval(feed_dict={tf_placeholder: [target]})
+    target_vector = np.array(target_embeds)
 
-        embeds = embeddings.eval(feed_dict={input_sentences: [target] + source_sentences })
-        distances = []
+    source_embeddings = embed(source_sentences)
+    source_embeds = source_embeddings.eval(feed_dict={tf_placeholder:  source_sentences})
+    source_matrix = np.array(source_embeds)
 
-        target = None
-        matrix = np.array(embeds)
-        for i, w in enumerate(matrix):
-            if i == 0:
-                # remember the target vector
-                target = w
-            else:
-                # store simmilarity measures betwean each of the sentences and the target
-                distances.append(spatial.distance.cosine(target, w))
-        distances = np.array(distances)
-        distances = distances.argsort()[-topk:][::-1]
+    cosine_distances = []
+    for i, w in enumerate(source_matrix):
+            # store simmilarity measures betwean each of the sentences and the target
+            cosine_score = spatial.distance.cosine(target_vector, w)
+            cosine_distances.append(cosine_score)
+    cosine_distances = np.array(cosine_distances)
+    lowest_cosine_distances = cosine_distances.argsort()[:topk]
 
-        target_binarized = np.zeros(len(source_sentences))
-        np.put(target_binarized, distances, 1, mode='clip')
+    target_binarized = np.zeros(len(cosine_distances))
+    np.put(target_binarized, lowest_cosine_distances, 1, mode='clip')
 
-        return target_binarized.tolist()
+    return target_binarized.tolist()
+
 
 
 def main():

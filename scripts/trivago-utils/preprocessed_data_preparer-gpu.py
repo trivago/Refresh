@@ -16,8 +16,6 @@ from scipy import spatial
 from generic_utils import build_vocab_dictionary
 from generic_utils import convert_sentence_to_word_ids
 
-import time
-import gc
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -25,7 +23,6 @@ def parse_arguments():
     parser.add_argument('-t', '--target', help="Corresponding target file", required=True)
     parser.add_argument('-v', '--vocab', help="Vocab file", required=True)
     parser.add_argument('-dt', '--data_type', help="Data Type e.g. training, test, etc.", required=True)
-    parser.add_argument('-ls', '--line_start', help="Line start number", required=False)
 
     args = parser.parse_args()
 
@@ -33,10 +30,6 @@ def parse_arguments():
     target_argument = args.target
     vocab_argument = args.vocab
     data_type_argument = args.data_type
-    line_start_number = args.line_start
-
-    if line_start_number is None:
-        line_start_number = 0
 
     if os.path.isfile(input_argument) and os.path.isfile(target_argument) \
             and os.path.isfile(vocab_argument):
@@ -48,8 +41,7 @@ def parse_arguments():
 
         create_image_file(open(input_argument, "r", encoding="utf-8"), vocab_dict, target_sentence_ids, data_type_argument)
 
-        create_single_oracle(open(input_argument, "r", encoding="utf-8"), target_sentence_ids, data_type_argument,
-                             int(line_start_number))
+        create_single_oracle(open(input_argument, "r", encoding="utf-8"), target_sentence_ids, data_type_argument)
     else:
         print("*** Invalid arguments provided.")
 
@@ -94,9 +86,10 @@ def create_image_file(input_file, vocab_dict, target_sentence_dict, data_type_ar
     print("*** Finished Image file...")
 
 
-def create_single_oracle(input_file, target_sentence_dict, data_type_argument, line_start_number):
+def create_single_oracle(input_file, target_sentence_dict, data_type_argument):
     print("*** Fetching Universal Sentence Encoder embeddings")
     embed = hub.Module("https://tfhub.dev/google/universal-sentence-encoder-large/3")
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.7, allocator_type='BFC', allow_growth=True)
 
     print("*** Creating Single Oracle file...")
 
@@ -104,21 +97,25 @@ def create_single_oracle(input_file, target_sentence_dict, data_type_argument, l
                        "/usp-" + data_type_argument + ".label.singleoracle"
     logging_file_path = os.path.dirname(os.path.realpath(input_file.name)) + "/usp-" + data_type_argument + ".log.txt"
 
-    if line_start_number == 0:
-        print("*** Creating new Oracle and Logging Files...")
-        oracle_file = open(oracle_file_path, "w")
-        oracle_file.close()
 
-        logging_file = open(logging_file_path, "w")
-        logging_file.close()
+    print("*** Creating new Oracle and Logging Files...")
+    oracle_file = open(oracle_file_path, "w")
+    oracle_file.close()
+
+    logging_file = open(logging_file_path, "w")
+    logging_file.close()
 
     target_sentence_ids = list(target_sentence_dict.keys())
 
-    for line_count, line in enumerate(input_file):
-        oracle_file = open(oracle_file_path, "a")
-        logging_file = open(logging_file_path, "a")
+    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=False,
+                                          gpu_options=gpu_options)) as session:
+        session.run([tf.global_variables_initializer(), tf.tables_initializer()])
+        tf_placeholder = tf.placeholder(tf.string, shape=[None])
 
-        if line_count > line_start_number or line_count == line_start_number:
+        for line_count, line in enumerate(input_file):
+            oracle_file = open(oracle_file_path, "a")
+            logging_file = open(logging_file_path, "a")
+
             if line_count <= (len(target_sentence_ids) - 1):
                 title_uuid = target_sentence_ids[line_count]
                 target_sentence = target_sentence_dict[title_uuid]
@@ -132,7 +129,7 @@ def create_single_oracle(input_file, target_sentence_dict, data_type_argument, l
                 logging_file.write("*** Processing line number {} \n".format(line_count))
                 logging_file.write("*** Number of sentences: {} \n".format(len(sent_tokenize_list)))
 
-                distances = prepare_labels(embed, sent_tokenize_list, target_sentence)
+                distances = prepare_labels(embed, tf_placeholder, sent_tokenize_list, target_sentence)
 
                 for dist_count, a_distance in enumerate(distances):
                     oracle_file.write(str(int(a_distance)) + "\n")
@@ -141,42 +138,35 @@ def create_single_oracle(input_file, target_sentence_dict, data_type_argument, l
             else:
                 logging_file.write("*** Line number {} is greater than target sentences length {} \n".format(line_count,
                                                                                                              len(target_sentence_ids) - 1))
-        oracle_file.close()
-        logging_file.close()
+            oracle_file.close()
+            logging_file.close()
     logging_file = open(logging_file_path, "w")
     logging_file.write("*** Finished creating Single Oracle file.")
     logging_file.close()
 
 
-def prepare_labels(embed, source_sentences:list, target:str, topk:int=3):
+def prepare_labels(embed, tf_placeholder, source_sentences:list, target:str, topk:int=3):
     # function returning ids of topk number of best sentences
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.7, allocator_type='BFC', allow_growth = True)
-    
+    target_embeddings = embed([target])
+    target_embeds = target_embeddings.eval(feed_dict={tf_placeholder: [target]})
+    target_vector = np.array(target_embeds)
 
-    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=False, gpu_options=gpu_options)) as session:
-        session.run([tf.global_variables_initializer(), tf.tables_initializer()])
-        input_sentences = tf.placeholder(tf.string, shape=[None])
-        embeddings = embed(input_sentences)
+    source_embeddings = embed(source_sentences)
+    source_embeds = source_embeddings.eval(feed_dict={tf_placeholder: source_sentences})
+    source_matrix = np.array(source_embeds)
 
-        embeds = embeddings.eval(feed_dict={input_sentences: [target] + source_sentences })
-        distances = []
+    cosine_distances = []
+    for i, w in enumerate(source_matrix):
+        # store simmilarity measures betwean each of the sentences and the target
+        cosine_score = spatial.distance.cosine(target_vector, w)
+        cosine_distances.append(cosine_score)
+    cosine_distances = np.array(cosine_distances)
+    lowest_cosine_distances = cosine_distances.argsort()[:topk]
 
-        target = None
-        matrix = np.array(embeds)
-        for i, w in enumerate(matrix):
-            if i == 0:
-                # remember the target vector
-                target = w
-            else:
-                # store simmilarity measures betwean each of the sentences and the target
-                distances.append(spatial.distance.cosine(target, w))
-        distances = np.array(distances)
-        distances = distances.argsort()[-topk:][::-1]
+    target_binarized = np.zeros(len(cosine_distances))
+    np.put(target_binarized, lowest_cosine_distances, 1, mode='clip')
 
-        target_binarized = np.zeros(len(source_sentences))
-        np.put(target_binarized, distances, 1, mode='clip')
-
-        return target_binarized.tolist()
+    return target_binarized.tolist()
 
 
 def main():
