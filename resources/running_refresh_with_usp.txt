@@ -1,0 +1,10 @@
+Training Refresh Model
+======================
+
+setsid nohup stdbuf -oL python document_summarizer_training_testing.py --data_mode usp --preprocessed_data_directory /home/ubuntu/Data/EdinburghNLP-Refresh/trivago/corpora-new/ --exp_mode train --train_dir /home/ubuntu/Data/EdinburghNLP-Refresh/trivago/train-dir/ --pretrained_wordembedding /home/ubuntu/Data/EdinburghNLP-Refresh/1-billion-word-language-modeling-benchmark-r13output.word2vec.vec --doc_sentence_directory /home/ubuntu/Data/EdinburghNLP-Refresh/trivago/segmented/ --gold_summary_directory /home/ubuntu/Data/EdinburghNLP-Refresh/trivago/gold/ --num_sample_rollout 5 > /home/ubuntu/Data/EdinburghNLP-Refresh/trivago/output/train.log &
+
+
+Inferring Refresh Model
+=======================
+
+python document_summarizer_training_testing.py --data_mode usp --exp_mode test --pretrained_wordembedding /Users/smahamood/Data/EdinburghNLP-Refresh/1-billion-word-language-modeling-benchmark-r13output.word2vec.vec --preprocessed_data_directory /Users/smahamood/Data/EdinburghNLP-Refresh/trivago/corpora-new --gold_summary_directory /Users/smahamood/Data/EdinburghNLP-Refresh/trivago/gold/ --doc_sentence_directory  /Users/smahamood/Data/EdinburghNLP-Refresh/trivago/segmented/ --train_dir /Users/smahamood/Data/EdinburghNLP-Refresh/trivago/pretrained-models/usp-sample-5-06.04.2019 --model_to_load 19 --num_sample_rollout 1 > /Users/smahamood/Data/EdinburghNLP-Refresh/trivago/output/test.model19.log
