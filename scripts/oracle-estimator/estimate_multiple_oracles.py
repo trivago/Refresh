@@ -9,7 +9,7 @@ import re
 import itertools
 from multiprocessing import Pool
 import sys
-from preprocess import rouge
+import rouge
 import codecs
 
 
@@ -36,7 +36,7 @@ def get_fileids(topdir, newstype, datatype, server):
         return open(
             topdir + "/Temp-ServerFileIds/dailymail-" + datatype + "-fileids.txt." + server).read().strip().split("\n")
 
-    print "Error: Only CNN and DailyMail allowed."
+    print("Error: Only CNN and DailyMail allowed.")
     exit(0)
 
 
@@ -63,6 +63,8 @@ if __name__ == "__main__":
         listfiles = _listfiles[int(all_l / 3):int(all_l * 2 / 3)]
     elif (task == 2):
         listfiles = _listfiles[int(all_l * 2 / 3):]
+    elif (task == 3):
+        listfiles = _listfiles
 
     fianllabeldir = os.path.join(data_dir, 'article-oracles')
     if (not os.path.exists(fianllabeldir)):
@@ -78,7 +80,11 @@ if __name__ == "__main__":
         print(summaryfname)
         sentfull = os.path.join(mainbody_dir, summaryfname + ".article")
         sentdata = (codecs.open(sentfull, encoding='utf-8').readlines())  # full doc
-        goldfull = os.path.join(highlights_dir, summaryfname + ".abstracts")
+        #goldfull = os.path.join(highlights_dir, summaryfname + ".abstracts")
+        gold_file_name = summaryfname.replace("src", "tgt")
+        #tokens = gold_file_name.split("-")
+        #gold_file_name = tokens[0] + "-" + tokens[0] + "-" + tokens[2] + "-" + tokens[3] + "-" + tokens[4]
+        goldfull = os.path.join(highlights_dir, gold_file_name + ".abstracts")
         golddata = (codecs.open(goldfull, encoding='utf-8').readlines())  # full doc
 
         rougesentwisefile = os.path.join(fianllabeldir, summaryfname + ".f-sent")
@@ -123,5 +129,5 @@ if __name__ == "__main__":
         foutput.close()
 
         if fullcount % 100 == 0:
-            print fullcount
+            print(fullcount)
         fullcount += 1

@@ -35,7 +35,7 @@ def _rouge(system_dir, gold_dir):
     r.model_dir = gold_dir
     r.system_filename_pattern = '([a-zA-Z0-9]*).model'
     r.model_filename_pattern = '#ID#.gold'
-    output = r.convert_and_evaluate(rouge_args="-e /address/to/rouge/data/directory/rouge/data -a -c 95 -m -n 4 -w 1.2")
+    output = r.convert_and_evaluate(rouge_args="-e /usr/local/share/ROUGE-1.5.5/data -a -c 95 -m -n 4 -w 1.2")
     # print output
     output_dict = r.output_to_dict(output)
     # print output_dict

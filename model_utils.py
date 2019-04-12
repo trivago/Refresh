@@ -350,7 +350,7 @@ def predict_topranked(batch_softmax_logits, batch_weights, batch_filenames):
     
     # Select Top Sentences : CNN-3 and DM-4
     final_sentences = []
-    if filename.startswith("cnn-"):
+    if filename.startswith("cnn-") or filename.startswith("usp"):
       final_sentences = sentindices[:3]
     elif filename.startswith("dailymail-"):
       final_sentences = sentindices[:4]

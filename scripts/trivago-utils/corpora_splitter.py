@@ -1,4 +1,4 @@
-# corpora_splitter.py -- Performs sentence segmentation and splits each sentence in a seperate file when called.
+# corpora_splitter.py -- Performs sentence segmentation and splits each sentence in a separate file when called.
 # @author Saad Mahamood
 
 import argparse

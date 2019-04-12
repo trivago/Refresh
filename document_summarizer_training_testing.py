@@ -265,6 +265,7 @@ def test():
       test_acc = sess.run(model.final_accuracy, feed_dict={model.logits_placeholder: test_logits.eval(session=sess), 
                                                              model.label_placeholder: test_labels.eval(session=sess), 
                                                              model.weight_placeholder: test_weights.eval(session=sess)})
+
       # Print Test Summary
       print("Test ("+str(len(test_data.fileindices))+") accuracy= {:.6f}".format(test_acc))
       # Writing test predictions and final summaries

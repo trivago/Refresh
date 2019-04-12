@@ -1,4 +1,4 @@
-# preprocessed_data_preparer-gpu.py -- Prepares trivago USP corpora for the Refresh model when called.
+# preprocessed_data_preparer-docker.py -- Prepares trivago USP corpora for the Refresh model when called.
 # Requires Python 3 and Tensorflow v1+ to run.
 # @author Saad Mahamood
 
@@ -8,10 +8,11 @@ import os.path
 from nltk.tokenize import sent_tokenize
 import uuid
 
-import tensorflow as tf
-import tensorflow_hub as hub
 import numpy as np
 from scipy import spatial
+
+import requests
+import json
 
 from generic_utils import build_vocab_dictionary
 from generic_utils import convert_sentence_to_word_ids
@@ -35,13 +36,13 @@ def parse_arguments():
             and os.path.isfile(vocab_argument):
         print("*** Opening file...")
 
-        vocab_dict = build_vocab_dictionary(open(vocab_argument, "r", encoding="utf-8"))
+        vocab_dict = build_vocab_dictionary(open(vocab_argument, "r"))
 
-        target_sentence_ids = create_titles_file(open(target_argument, "r", encoding="utf-8"), vocab_dict, data_type_argument)
+        target_sentence_ids = create_titles_file(open(target_argument, "r"), vocab_dict, data_type_argument)
 
-        create_image_file(open(input_argument, "r", encoding="utf-8"), vocab_dict, target_sentence_ids, data_type_argument)
+        create_image_file(open(input_argument, "r"), vocab_dict, target_sentence_ids, data_type_argument)
 
-        create_single_oracle(open(input_argument, "r", encoding="utf-8"), target_sentence_ids, data_type_argument)
+        create_single_oracle(open(input_argument, "r"), target_sentence_ids, data_type_argument)
     else:
         print("*** Invalid arguments provided.")
 
@@ -87,10 +88,6 @@ def create_image_file(input_file, vocab_dict, target_sentence_dict, data_type_ar
 
 
 def create_single_oracle(input_file, target_sentence_dict, data_type_argument):
-    print("*** Fetching Universal Sentence Encoder embeddings")
-    embed = hub.Module("https://tfhub.dev/google/universal-sentence-encoder-large/3")
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.7, allocator_type='BFC', allow_growth=True)
-
     print("*** Creating Single Oracle file...")
 
     oracle_file_path = os.path.dirname(os.path.realpath(input_file.name)) + \
@@ -107,70 +104,60 @@ def create_single_oracle(input_file, target_sentence_dict, data_type_argument):
 
     target_sentence_ids = list(target_sentence_dict.keys())
 
-    target_sources_dict = {}
-    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=False,
-                                          gpu_options=gpu_options)) as session:
-        session.run([tf.global_variables_initializer(), tf.tables_initializer()])
-        tf_placeholder = tf.placeholder(tf.string, shape=[None])
 
-        logging_file = open(logging_file_path, "a")
+    for line_count, line in enumerate(input_file):
         oracle_file = open(oracle_file_path, "a")
-        logging_file.write("*** Calculating target vectors and source embedding matrices. \n")
-        for line_count, line in enumerate(input_file):
+        logging_file = open(logging_file_path, "a")
 
-            if line_count <= (len(target_sentence_ids) - 1):
-                title_uuid = target_sentence_ids[line_count]
-                target_sentence = target_sentence_dict[title_uuid]
-
-                sent_tokenize_list = sent_tokenize(line)
-
-                logging_file.write("*** Processing line number {} \n".format(line_count))
-                logging_file.write("*** Number of sentences: {} \n".format(len(sent_tokenize_list)))
-
-                prepare_labels(embed, tf_placeholder, sent_tokenize_list, target_sentence, target_sources_dict)
-
-
-            else:
-                logging_file.write("*** Line number {} is greater than target sentences length {} \n".format(line_count,
-                                                                                                             len(target_sentence_ids) - 1))
-
-    logging_file.write("*** Calculating cosine distances. \n")
-    for target_count, a_target in enumerate(target_sources_dict):
-        logging_file.write("*** Processing cosine number {} \n".format(target_count))
-        distances = calculate_distances(target_sources_dict[a_target][0], target_sources_dict[a_target][1])
-
-        if target_count <= (len(target_sentence_ids) - 1):
+        if line_count <= (len(target_sentence_ids) - 1):
             title_uuid = target_sentence_ids[line_count]
+            target_sentence = target_sentence_dict[title_uuid]
+
             oracle_file.write(title_uuid + "\n")
+
+            print("*** Processing line number {}".format(line_count))
+            sent_tokenize_list = sent_tokenize(line)
+            print("*** Number of sentences: {}".format(len(sent_tokenize_list)))
+
+            logging_file.write("*** Processing line number {} \n".format(line_count))
+            logging_file.write("*** Number of sentences: {} \n".format(len(sent_tokenize_list)))
+
+
+            distances = prepare_singleoracle(sent_tokenize_list, target_sentence)
 
             for dist_count, a_distance in enumerate(distances):
                 oracle_file.write(str(int(a_distance)) + "\n")
                 if dist_count == (len(distances) - 1):
                     oracle_file.write("\n")
+        else:
+            logging_file.write("*** Line number {} is greater than target sentences length {} \n".format(line_count,
+                                                                                                         len(target_sentence_ids) - 1))
+        oracle_file.close()
+        logging_file.close()
+    logging_file = open(logging_file_path, "w")
     logging_file.write("*** Finished creating Single Oracle file.")
-    oracle_file.close()
     logging_file.close()
 
 
-def prepare_labels(embed, tf_placeholder, source_sentences:list, target:str, target_sources_dict):
+def prepare_singleoracle(source_sentences:list, target:str, topk:int=3):
     # function returning ids of topk number of best sentences
-    target_embeddings = embed([target])
-    target_embeds = target_embeddings.eval(feed_dict={tf_placeholder: [target]})
-    target_vector = np.array(target_embeds)
+    headers = {'content-type': 'application/json', 'Accept-Charset': 'UTF-8'}
+    url = 'http://localhost:8501/v1/models/universal_encoder:predict'
 
-    source_embeddings = embed(source_sentences)
-    source_embeds = source_embeddings.eval(feed_dict={tf_placeholder: source_sentences})
-    source_matrix = np.array(source_embeds)
+    target_data = {"instances": [target]}
+    sources_data = {"instances": source_sentences}
 
-    target_sources_dict[target] = [target_vector, source_matrix]
+    target_response = requests.post(url, data=json.dumps(target_data), headers=headers)
+    source_response = requests.post(url, data=json.dumps(sources_data), headers=headers)
 
+    target_vector = np.array(json.loads(target_response.text)["predictions"])
+    source_matrix = np.array(json.loads(source_response.text)["predictions"])
 
-def calculate_distances(target_vector, source_matrix, topk:int=3):
     cosine_distances = []
     for i, w in enumerate(source_matrix):
-        # store simmilarity measures betwean each of the sentences and the target
-        cosine_score = spatial.distance.cosine(target_vector, w)
-        cosine_distances.append(cosine_score)
+            # store simmilarity measures betwean each of the sentences and the target
+            cosine_score = spatial.distance.cosine(target_vector, w)
+            cosine_distances.append(cosine_score)
     cosine_distances = np.array(cosine_distances)
     lowest_cosine_distances = cosine_distances.argsort()[:topk]
 
@@ -178,6 +165,7 @@ def calculate_distances(target_vector, source_matrix, topk:int=3):
     np.put(target_binarized, lowest_cosine_distances, 1, mode='clip')
 
     return target_binarized.tolist()
+
 
 def main():
     parse_arguments()
